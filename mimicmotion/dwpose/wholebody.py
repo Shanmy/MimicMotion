@@ -1,4 +1,5 @@
 import numpy as np
+import torch
 import onnxruntime as ort
 
 from .onnxdet import inference_detector

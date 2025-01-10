@@ -5,8 +5,10 @@ base_model_path: stabilityai/stable-video-diffusion-img2vid-xt-1-1
 ckpt_path: models/MimicMotion_1-1.pth
 
 test_case:
-  - ref_video_path: assets/example_data/videos/pose1.mp4
-    ref_image_path: assets/example_data/images/demo1.jpg
+  - ref_video_path: assets/example_data/videos/street-single-new.mp4
+    ref_image_path: assets/example_data/images/human.png
+    crop_with_offset: True
+    bg: assets/example_data/images/empty.jpg
     num_frames: 72
     resolution: 576
     frames_overlap: 6

@@ -7,10 +7,13 @@ from datetime import datetime
 from pathlib import Path
 
 import numpy as np
+import torch
 import torch.jit
 from torchvision.datasets.folder import pil_loader
 from torchvision.transforms.functional import pil_to_tensor, resize, center_crop
 from torchvision.transforms.functional import to_pil_image
+from PIL import Image
+
 
 
 from mimicmotion.utils.geglu_patch import patch_geglu_inplace
@@ -20,7 +23,7 @@ from constants import ASPECT_RATIO
 
 from mimicmotion.pipelines.pipeline_mimicmotion import MimicMotionPipeline
 from mimicmotion.utils.loader import create_pipeline
-from mimicmotion.utils.utils import save_to_mp4
+from mimicmotion.utils.utils import save_to_mp4, paste_crop
 from mimicmotion.dwpose.preprocess import get_video_pose, get_image_pose
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s: [%(levelname)s] %(message)s")
@@ -28,7 +31,7 @@ logger = logging.getLogger(__name__)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-def preprocess(video_path, image_path, resolution=576, sample_stride=2):
+def preprocess(video_path, image_path, crop_with_offset=False, resolution=576, sample_stride=2):
     """preprocess ref image pose and video pose
 
     Args:
@@ -51,14 +54,16 @@ def preprocess(video_path, image_path, resolution=576, sample_stride=2):
     else:
         h_resize, w_resize = math.ceil(w_target * h_w_ratio), w_target
     image_pixels = resize(image_pixels, [h_resize, w_resize], antialias=None)
-    image_pixels = center_crop(image_pixels, [h_target, w_target])
+    image_pixels = center_crop(image_pixels, [h_target, w_target])   # torch.Size([3, 576, 1024])
     image_pixels = image_pixels.permute((1, 2, 0)).numpy()
     ##################################### get image&video pose value #################################################
     image_pose = get_image_pose(image_pixels)
-    video_pose = get_video_pose(video_path, image_pixels, sample_stride=sample_stride)
+    # image_pose[:, :, :300] = 0 # temp fix for detecting multiple people
+    # Image.fromarray(video_pose[0].transpose(1, 2, 0)).save("pose.png")
+    video_pose, pix_offset = get_video_pose(video_path, image_pixels, crop_with_offset=crop_with_offset, sample_stride=sample_stride)
     pose_pixels = np.concatenate([np.expand_dims(image_pose, 0), video_pose])
     image_pixels = np.transpose(np.expand_dims(image_pixels, 0), (0, 3, 1, 2))
-    return torch.from_numpy(pose_pixels.copy()) / 127.5 - 1, torch.from_numpy(image_pixels) / 127.5 - 1
+    return torch.from_numpy(pose_pixels.copy()) / 127.5 - 1, torch.from_numpy(image_pixels) / 127.5 - 1, pix_offset
 
 
 def run_pipeline(pipeline: MimicMotionPipeline, image_pixels, pose_pixels, device, task_config):
@@ -92,9 +97,9 @@ def main(args):
 
     for task in infer_config.test_case:
         ############################################## Pre-process data ##############################################
-        pose_pixels, image_pixels = preprocess(
+        pose_pixels, image_pixels, pix_offset = preprocess(
             task.ref_video_path, task.ref_image_path, 
-            resolution=task.resolution, sample_stride=task.sample_stride
+            resolution=task.resolution, crop_with_offset=task.crop_with_offset, sample_stride=task.sample_stride
         )
         ########################################### Run MimicMotion pipeline ###########################################
         _video_frames = run_pipeline(
@@ -103,6 +108,8 @@ def main(args):
             device, task
         )
         ################################### save results to output folder. ###########################################
+        bg = Image.open(task.bg)
+        _video_frames = torch.Tensor(paste_crop(_video_frames, bg, pix_offset))
         save_to_mp4(
             _video_frames, 
             f"{args.output_dir}/{os.path.basename(task.ref_video_path).split('.')[0]}" \
